@@ -126,20 +126,16 @@ struct SettingsView: View {
 			}
 
 			Section("Recent speech") {
-				let spoken = speaker.history.filter { $0.kind == "speak" && !$0.text.isEmpty }.suffix(25).reversed()
-				if spoken.isEmpty {
-					Text("Nothing yet.").foregroundStyle(.secondary)
-				}
-				ForEach(Array(spoken)) { e in
-					Text(e.text)
-						.textSelection(.enabled)
-						.help(e.source)
-						.accessibilityLabel("\(e.text), from \(e.source)")
-				}
+				SpeechTable(events: spoken).frame(minHeight: 200)
 			}
 		}
 		.formStyle(.grouped)
 		.frame(minWidth: 460, minHeight: 520)
+	}
+
+	/// Spoken text, newest first.
+	private var spoken: [Speaker.Event] {
+		speaker.history.filter { $0.kind == "speak" && !$0.text.isEmpty }.suffix(100).reversed()
 	}
 
 	private var languageBinding: Binding<String> {
@@ -157,9 +153,7 @@ struct SettingsView: View {
 	private func percentSlider(_ label: String, value: Float, set: @escaping (Float) -> Void) -> some View {
 		LabeledContent(label) {
 			HStack {
-				Slider(value: Binding(get: { Double(value) }, set: { set(Float($0.rounded())) }), in: 0...100, step: 1)
-					.accessibilityLabel(label)
-					.accessibilityValue("\(Int(value)) percent")
+				PercentSlider(label: label, value: value, set: set)
 				Text("\(Int(value))").monospacedDigit().frame(width: 32, alignment: .trailing)
 					.accessibilityHidden(true)
 			}
@@ -177,6 +171,134 @@ struct SettingsView: View {
 		case .enhanced: return "\(v.name) (Enhanced)"
 		default: return v.name
 		}
+	}
+}
+
+/// A 0-100 slider that moves by 1 with the arrow keys, 5 with Page Up and
+/// Page Down, and to either end with Home and End. SwiftUI's Slider only
+/// takes the arrows.
+struct PercentSlider: NSViewRepresentable {
+	let label: String
+	let value: Float
+	let set: (Float) -> Void
+
+	final class View: NSSlider {
+		var onChange: ((Float) -> Void)?
+
+		func step(to v: Double) {
+			doubleValue = max(minValue, min(maxValue, v.rounded()))
+			describe()
+			onChange?(Float(doubleValue))
+		}
+
+		func describe() { setAccessibilityValueDescription("\(Int(doubleValue)) percent") }
+
+		override func keyDown(with e: NSEvent) {
+			switch Int(e.keyCode) {
+			case 116: step(to: doubleValue + 5)            // Page Up
+			case 121: step(to: doubleValue - 5)            // Page Down
+			case 115: step(to: minValue)                   // Home
+			case 119: step(to: maxValue)                   // End
+			case 123, 125: step(to: doubleValue - 1)       // Left, Down
+			case 124, 126: step(to: doubleValue + 1)       // Right, Up
+			default: super.keyDown(with: e)
+			}
+		}
+
+		override func accessibilityPerformIncrement() -> Bool { step(to: doubleValue + 1); return true }
+		override func accessibilityPerformDecrement() -> Bool { step(to: doubleValue - 1); return true }
+
+		@objc func moved() { step(to: doubleValue) }
+	}
+
+	func makeNSView(context: Context) -> View {
+		let s = View()
+		s.minValue = 0
+		s.maxValue = 100
+		s.target = s
+		s.action = #selector(View.moved)
+		s.setAccessibilityLabel(label)
+		return s
+	}
+
+	func updateNSView(_ s: View, context: Context) {
+		s.onChange = set
+		if s.doubleValue != Double(value) { s.doubleValue = Double(value) }
+		s.describe()
+	}
+}
+
+/// Recent speech as an AppKit table. SwiftUI's Table reaches VoiceOver as an
+/// outline without column names.
+struct SpeechTable: NSViewRepresentable {
+	let events: [Speaker.Event]
+
+	final class TableView: NSTableView {
+		var events: [Speaker.Event] = []
+
+		/// Copy puts the selected rows' text on the pasteboard.
+		@objc func copy(_ sender: Any?) {
+			let text = selectedRowIndexes.map { events[$0].text }.joined(separator: "\n")
+			guard !text.isEmpty else { return }
+			NSPasteboard.general.clearContents()
+			NSPasteboard.general.setString(text, forType: .string)
+		}
+	}
+
+	final class Coordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
+		var events: [Speaker.Event] = []
+		let time = DateFormatter()
+
+		override init() { time.timeStyle = .medium }
+
+		func numberOfRows(in t: NSTableView) -> Int { events.count }
+
+		func tableView(_ t: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
+			guard let column else { return nil }
+			let e = events[row]
+			let cell = t.makeView(withIdentifier: column.identifier, owner: nil) as? NSTextField
+				?? { let f = NSTextField(labelWithString: ""); f.identifier = column.identifier; f.lineBreakMode = .byTruncatingTail; return f }()
+			switch column.identifier.rawValue {
+			case "text": cell.stringValue = e.text; cell.toolTip = e.text
+			case "source": cell.stringValue = e.source
+			default: cell.stringValue = time.string(from: e.time)
+			}
+			return cell
+		}
+	}
+
+	func makeCoordinator() -> Coordinator { Coordinator() }
+
+	func makeNSView(context: Context) -> NSScrollView {
+		let t = TableView()
+		for (id, title, width) in [("text", "Text", 260.0), ("source", "Program", 110.0), ("time", "Time", 80.0)] {
+			let c = NSTableColumn(identifier: .init(id))
+			c.title = title
+			c.width = width
+			t.addTableColumn(c)
+		}
+		t.allowsMultipleSelection = true
+		t.usesAlternatingRowBackgroundColors = true
+		t.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
+		t.dataSource = context.coordinator
+		t.delegate = context.coordinator
+		t.setAccessibilityLabel("Recent speech")
+		let scroll = NSScrollView()
+		scroll.documentView = t
+		scroll.hasVerticalScroller = true
+		scroll.borderType = .bezelBorder
+		return scroll
+	}
+
+	func updateNSView(_ scroll: NSScrollView, context: Context) {
+		guard let t = scroll.documentView as? TableView,
+		      context.coordinator.events.map(\.id) != events.map(\.id) else { return }
+		// Keep the selection on the same entries as new ones arrive on top.
+		let selected = Set(t.selectedRowIndexes.map { t.events[$0].id })
+		context.coordinator.events = events
+		t.events = events
+		t.reloadData()
+		t.selectRowIndexes(IndexSet(events.indices.filter { selected.contains(events[$0].id) }), byExtendingSelection: false)
 	}
 }
 
@@ -268,20 +390,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 		let menu = NSMenu()
 		menu.delegate = self
 		menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
-		menu.addItem(withTitle: "Stop Speech", action: #selector(stopSpeech), keyEquivalent: "").target = self
 		controlItem = menu.addItem(withTitle: "Stop Speech on Control", action: #selector(toggleControl), keyEquivalent: "")
 		controlItem.target = self
 		menu.addItem(.separator())
 		menu.addItem(withTitle: "Quit Crosstalk", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 		statusItem.menu = menu
+
+		// The menu bar shown while settings are open, mostly for its shortcuts.
+		let main = NSMenu()
+		let appMenu = NSMenu()
+		appMenu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+		appMenu.addItem(.separator())
+		appMenu.addItem(withTitle: "Hide Crosstalk", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+		appMenu.addItem(.separator())
+		appMenu.addItem(withTitle: "Quit Crosstalk", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+		let editMenu = NSMenu(title: "Edit")
+		editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+		editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+		editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+		editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+		let windowMenu = NSMenu(title: "Window")
+		windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+		windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+		for sub in [appMenu, editMenu, windowMenu] {
+			main.addItem(withTitle: sub.title, action: nil, keyEquivalent: "").submenu = sub
+		}
+		NSApp.mainMenu = main
+		NSApp.windowsMenu = windowMenu
 	}
 
 	func menuWillOpen(_ menu: NSMenu) {
 		controlItem.state = ControlKeyMonitor.shared.enabled ? .on : .off
 	}
 
-	@objc private func openSettings() { showSettings() }
-	@objc private func stopSpeech() { Speaker.shared.stop() }
+	@objc private func openSettings() {
+		// Wait for the status menu to finish closing; activating while it
+		// tracks leaves the window behind whatever app was in front.
+		DispatchQueue.main.async { self.showSettings() }
+	}
 	@objc private func toggleControl() { ControlKeyMonitor.shared.enabled.toggle() }
 
 	private func showSettings() {
@@ -302,8 +448,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 		// out of reach of VoiceOver and Command-Tab. Be a regular app while
 		// settings are open.
 		NSApp.setActivationPolicy(.regular)
-		NSApp.activate()
+		// Cooperative activation is refused when the request comes from the
+		// status menu rather than from an app the user was in, so insist.
+		NSApp.activate(ignoringOtherApps: true)
 		window?.makeKeyAndOrderFront(nil)
+		window?.orderFrontRegardless()
 	}
 
 	func windowWillClose(_ note: Notification) {

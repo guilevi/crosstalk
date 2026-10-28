@@ -66,6 +66,7 @@ final class Speaker: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, @u
 		let utterance: UInt64
 		let source: String
 		let text: String
+		let time = Date()
 		var line: String { "\(kind)\t\(utterance)\t\(source)\t\(text)" }
 	}
 
