@@ -1,38 +1,38 @@
 # crosstalk
 
 Speech for Windows programs running under CrossOver/Wine on macOS, by
-pretending to be NVDA inside the bottle. Mods and games that talk to NVDA
-(directly, through Tolk, or through Prism) work unmodified and speak with
+pretending to be NVDA running inside the bottle. Programs that talk directly to NVDA
+(also tested with Prism and Tolk) work unmodified and speak with
 macOS voices, as long as Crosstalk is running.
 
-It copies only what such programs talk to, not NVDA itself: nothing here reads
-the screen.
+Crosstalk only mirrors the parts of NVDA that matter for programs and games that talk directly to it through the controller client or UIA messages. It doesn't do any work to actually read the screen.
 
 ## Pieces
 
-```
-Windows program (game, mod)
-  ├─ nvdaControllerClient.dll ── ncalrpc NvdaCtlr.* ──▶ nvda.exe ──┐
-  │    (directly, via Tolk, or via Prism's NVDA backend)            │ loopback TCP
-  └─ UiaRaiseNotificationEvent ──▶ uiautomationcore.dll proxy ──────┤ 127.0.0.1:47655
-                                                                    ▼
-                                                   Crosstalk.app (AVSpeechSynthesizer)
-```
+A Windows program reaches Crosstalk by one of two routes:
 
-- **`Crosstalk.app`** (`app/`, `daemon/`): menu-bar app holding the one speech
-  queue every bottle feeds. Settings for language, voice, rate, volume and
-  pitch; stops speech when Control is pressed, in any app; shows recent speech.
+1. **NVDA controller:** the program, or a speech library it uses like Prism or Tolk, calls `nvdaControllerClient.dll`. The DLL talks over
+   ncalrpc (`NvdaCtlr.*` endpoints) to `nvda.exe`, which passes the speech onward.
+2. **UI Automation:** the program calls `UiaRaiseNotificationEvent`, which Crosstalk's
+   `uiautomationcore.dll` proxy catches and passes on.
+
+Both pass speech back to Mac OS over loopback TCP on 127.0.0.1:47655 to `Crosstalk.app`,
+which speaks it with AVSpeechSynthesizer.
+
+- **`Crosstalk.app`** (`app/`, `daemon/`): a menu-bar app holding the speech
+  queue. It also gives the user a settings interface for language, voice, rate, volume and
+  pitch and, if the accessibility permission is granted through Mac OS, stops speech when Control is pressed anywhere. It also shows speech history in a table for review.
   `build/crosstalkd` is the same server without UI.
-- **`nvda.exe`** (`wine/nvda/`): stand-in NVDA, run in each bottle. Serves the
+- **`nvda.exe`** (`wine/nvda/`): stand-in NVDA, which is run in each Wine/CX bottle. Serves the
   NVDA controller RPC interfaces (1 to 3, so every controller client from
   2012 to 2026.3 works) on NVDA's endpoint names, owns a hidden
   `wxWindowClassNR` / `NVDA` window (Tolk and others check for it), and sets
-  the system screen-reader flag, all as NVDA does.
+  the system screen-reader flag.
 - **`uiautomationcore.dll`** (`wine/uia/`): a proxy installed over Wine's,
-  forwarding everything to Wine's own copy (installed as
+  which forwards everything to Wine's own copy (installed as
   `crosstalk_wineuia.dll`) except:
   - `UiaRaiseNotificationEvent`, plus live-region and system-alert
-    `UiaRaiseAutomationEvent`s: their text goes to Crosstalk. Wine's own
+    `UiaRaiseAutomationEvent`s, which pass text onto Crosstalk. Wine's own
     version is a stub that drops them, with no path between processes;
   - `UiaClientsAreListening`: true while the stand-in NVDA runs;
   - in-process fixes for Wine's stubbed `RpcMgmtInqIfIds` and
@@ -66,8 +66,8 @@ if NVDA is ever unavailable.
 ## Build and install
 
 ```sh
-./build.sh                                   # needs Xcode CLT and mingw-w64
-./install.sh /path/to/Bottle       # per bottle
+./build.sh                                   # needs Xcode or command line tools and mingw-w64
+./install.sh /path/to/Bottle       # per each bottle you want Crosstalk to work on
 ./install.sh --uninstall /path/to/Bottle
 ```
 
@@ -75,25 +75,17 @@ if NVDA is ever unavailable.
 `C:\Program Files\Crosstalk\nvda.exe`, the proxy in `system32` and `syswow64`
 (Wine's originals backed up beside nvda.exe), and a `uiautomationcore`
 native-then-builtin DLL override.
-**Re-run it after a CrossOver update**, so the copy of Wine's
+It will probably need to be re-run after a Wine or Crossover update, so the copy of Wine's
 uiautomationcore the proxy forwards to matches the new Wine.
 
 Crosstalk registers itself to open at login, and starts `nvda.exe` in any
 bottle that has it installed as soon as that bottle boots. It watches for the
-bottle's wineserver, because CrossOver doesn't reliably run a bottle's Run
-keys. If a bottle boots first, its `nvda.exe` opens Crosstalk in the
+bottle's wineserver, because CrossOver doesn't seem to reliably run a bottle's Run
+keys. If a bottle boots first, its `nvda.exe` opens Crosstalk on the Mac in the
 background. The bottle also gets a **Crosstalk** launcher in CrossOver, to
-start `nvda.exe` by hand; launching it while it already runs does nothing.
+start `nvda.exe` by hand.
 
-macOS will ask, once each:
-- **Removable Volumes** (Privacy & Security, Files and Folders) for Crosstalk,
-  when bottles live on an external drive. Without it, wine commands Crosstalk
-  starts there hang. The watcher checks first and holds off instead: Settings
-  says the bottle is blocked, and `printf 'BOTTLES\n' | nc 127.0.0.1 47655`
-  lists it as `blocked`, and it looks again every 15 seconds, so granting
-  access takes effect without a restart. Bottles still get their `nvda.exe` from the installer
-  or a `wine` launch, just not automatically on boot.
-- **Accessibility**, for stopping speech with Control while other apps are in
+Make sure to grant the removable volume permissions through Mac OS system settings if your bottles are on an external drive! Granting accessibility permissions will also allow you to stop speech with Control while other apps are in
   front.
 
 Don't run real NVDA in a bottle at the same time: both would claim the same
@@ -114,7 +106,7 @@ printf 'BOTTLES\n' | nc 127.0.0.1 47655    # running bottles and whether Crossta
 
 ```sh
 python3 tests/daemon_test.py                         # queue semantics, Crosstalk running
-python3 tests/run_tests.py /path/to/Bottle # end to end in a bottle
+python3 tests/run_tests.py /path/to/bottle # end to end tests in a bottle
 ```
 
 `run_tests.py` drives real client libraries in the bottle through
