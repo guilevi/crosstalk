@@ -16,6 +16,11 @@ final class BottleWatcher {
 
 	/// wineserver pids already handled, mapped to their bottle.
 	private var seen: [pid_t: String] = [:]
+	/// Each running bottle's wineserver binary, for launching into it later.
+	private var servers: [String: String] = [:]
+	/// Bottles with a readability check in flight.
+	private var checking: Set<String> = []
+	private var polls = 0
 	private var timer: DispatchSourceTimer?
 	/// Bottles currently running with crosstalk installed.
 	private(set) var activeBottles: [String] = []
@@ -45,6 +50,7 @@ final class BottleWatcher {
 			}
 			guard let prefix = environment(pid)["WINEPREFIX"] else { continue }
 			live[pid] = prefix
+			servers[prefix] = path
 			if FileManager.default.fileExists(atPath: "\(prefix)/\(Self.standIn)") {
 				// Give the bottle a moment to finish booting before joining it.
 				DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.join(prefix, wineserver: path) }
@@ -55,6 +61,12 @@ final class BottleWatcher {
 			FileManager.default.fileExists(atPath: "\($0)/\(Self.standIn)")
 		}.sorted()
 		let blocked = blockedBottles.filter(active.contains)
+		servers = servers.filter { active.contains($0.key) }
+		// Access can be granted while a bottle runs; look again every 15s.
+		polls += 1
+		if polls % 5 == 0 {
+			for b in blocked { if let w = servers[b] { join(b, wineserver: w) } }
+		}
 		if active != activeBottles || blocked != blockedBottles {
 			activeBottles = active
 			blockedBottles = blocked
@@ -63,6 +75,7 @@ final class BottleWatcher {
 	}
 
 	private func join(_ prefix: String, wineserver: String) {
+		guard checking.insert(prefix).inserted else { return }
 		// CrossOver's wrapper hangs forever on a bottle it cannot read, so
 		// check first, from a child process as the wrapper would be: macOS
 		// judges a child's file access by Crosstalk's permissions, which can
@@ -70,6 +83,7 @@ final class BottleWatcher {
 		DispatchQueue.global().async {
 			let readable = childCanRead("\(prefix)/system.reg")
 			DispatchQueue.main.async {
+				self.checking.remove(prefix)
 				let wasBlocked = self.blockedBottles.contains(prefix)
 				if readable {
 					self.blockedBottles.removeAll { $0 == prefix }

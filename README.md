@@ -82,14 +82,16 @@ Crosstalk registers itself to open at login, and starts `nvda.exe` in any
 bottle that has it installed as soon as that bottle boots. It watches for the
 bottle's wineserver, because CrossOver doesn't reliably run a bottle's Run
 keys. If a bottle boots first, its `nvda.exe` opens Crosstalk in the
-background.
+background. The bottle also gets a **Crosstalk** launcher in CrossOver, to
+start `nvda.exe` by hand; launching it while it already runs does nothing.
 
 macOS will ask, once each:
 - **Removable Volumes** (Privacy & Security, Files and Folders) for Crosstalk,
   when bottles live on an external drive. Without it, wine commands Crosstalk
   starts there hang. The watcher checks first and holds off instead: Settings
   says the bottle is blocked, and `printf 'BOTTLES\n' | nc 127.0.0.1 47655`
-  lists it as `blocked`. Bottles still get their `nvda.exe` from the installer
+  lists it as `blocked`, and it looks again every 15 seconds, so granting
+  access takes effect without a restart. Bottles still get their `nvda.exe` from the installer
   or a `wine` launch, just not automatically on boot.
 - **Accessibility**, for stopping speech with Control while other apps are in
   front.

@@ -23,6 +23,8 @@ BOTTLE="${BOTTLE%/}"
 
 C="$BOTTLE/drive_c"
 DEST="$C/Program Files/Crosstalk"
+# CrossOver lists Start Menu shortcuts as the bottle's launchers.
+LINK='C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Crosstalk.lnk'
 
 bottle() {
 	CX_BOTTLE_PATH="$(dirname "$BOTTLE")" "$CX/bin/wine" --bottle "$(basename "$BOTTLE")" --wait-children -- "$@" 2>&1 \
@@ -37,6 +39,7 @@ if [ $uninstall = 1 ]; then
 	bottle reg delete 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run' /v Crosstalk /f
 	bottle reg delete 'HKCU\Software\Wine\DllOverrides' /v uiautomationcore /f
 	bottle reg delete 'HKLM\Software\Crosstalk' /f
+	bottle cscript //nologo 'C:\Program Files\Crosstalk\shortcut.js' "$LINK" -
 	for d in system32 syswow64; do
 		if [ -f "$DEST/backup/$d/uiautomationcore.dll" ]; then
 			cp "$DEST/backup/$d/uiautomationcore.dll" "$C/windows/$d/uiautomationcore.dll"
@@ -67,7 +70,7 @@ echo "Bottle: $BOTTLE"
 # Stop a running stand-in so its files can be replaced.
 if [ -f "$DEST/nvda.exe" ]; then bottle 'C:\Program Files\Crosstalk\nvda.exe' --quit; sleep 1; fi
 mkdir -p "$DEST"
-cp build/x64/nvda.exe "$DEST/"
+cp build/x64/nvda.exe wine/shortcut/shortcut.js "$DEST/"
 
 # The proxy goes where Wine's uiautomationcore.dll was, which is kept as a
 # backup; Wine's implementation, which the proxy forwards to, sits beside it.
@@ -86,6 +89,8 @@ bottle reg add 'HKCU\Software\Wine\DllOverrides' /v uiautomationcore /d native,b
 bottle reg add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run' /v Crosstalk \
 	/d '"C:\Program Files\Crosstalk\nvda.exe"' /f
 bottle reg add 'HKLM\Software\Crosstalk' /v Launcher /d "$LAUNCHER" /f
+bottle cscript //nologo 'C:\Program Files\Crosstalk\shortcut.js' "$LINK" \
+	'C:\Program Files\Crosstalk\nvda.exe' 'Start speech through Crosstalk'
 
 echo "Starting Crosstalk"
 open "$HOME/Applications/Crosstalk.app"
