@@ -19,6 +19,10 @@ final class BottleWatcher {
 	private var timer: DispatchSourceTimer?
 	/// Bottles currently running with crosstalk installed.
 	private(set) var activeBottles: [String] = []
+	/// Running bottles that processes started by Crosstalk cannot read, which
+	/// is what macOS does to an external drive until Crosstalk is allowed
+	/// "Removable Volumes" access.
+	private(set) var blockedBottles: [String] = []
 	var onChange: (() -> Void)?
 
 	func start() {
@@ -43,18 +47,41 @@ final class BottleWatcher {
 			live[pid] = prefix
 			if FileManager.default.fileExists(atPath: "\(prefix)/\(Self.standIn)") {
 				// Give the bottle a moment to finish booting before joining it.
-				DispatchQueue.main.asyncAfter(deadline: .now() + 2) { launch(in: prefix, wineserver: path) }
+				DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.join(prefix, wineserver: path) }
 			}
 		}
 		seen = live
 		let active = Array(Set(live.values)).filter {
 			FileManager.default.fileExists(atPath: "\($0)/\(Self.standIn)")
 		}.sorted()
-		if active != activeBottles {
+		let blocked = blockedBottles.filter(active.contains)
+		if active != activeBottles || blocked != blockedBottles {
 			activeBottles = active
+			blockedBottles = blocked
 			onChange?()
 		}
 	}
+
+	private func join(_ prefix: String, wineserver: String) {
+		// CrossOver's wrapper hangs forever on a bottle it cannot read, so
+		// check first, from a child process as the wrapper would be: macOS
+		// judges a child's file access by Crosstalk's permissions, which can
+		// differ from what Crosstalk itself was just allowed to see.
+		DispatchQueue.global().async {
+			let readable = childCanRead("\(prefix)/system.reg")
+			DispatchQueue.main.async {
+				let wasBlocked = self.blockedBottles.contains(prefix)
+				if readable {
+					self.blockedBottles.removeAll { $0 == prefix }
+					launch(in: prefix, wineserver: wineserver)
+				} else if !wasBlocked {
+					self.blockedBottles.append(prefix)
+				}
+				if wasBlocked == readable { self.onChange?() }
+			}
+		}
+	}
+
 }
 
 /// Runs nvda.exe in the bottle at `prefix` with the CrossOver that owns `wineserver`.
@@ -71,10 +98,24 @@ private func launch(in prefix: String, wineserver: String) {
 	p.standardOutput = FileHandle.nullDevice
 	p.standardError = FileHandle.nullDevice
 	guard (try? p.run()) != nil else { return }
-	// CrossOver's wrapper returns once nvda.exe is started. If it is still
-	// around after a minute it is stuck (on a bottle lock, or waiting for the
-	// removable-volume permission); don't let those pile up.
-	DispatchQueue.main.asyncAfter(deadline: .now() + 60) { if p.isRunning { p.terminate() } }
+	// CrossOver's wrapper returns once nvda.exe is started. One still around
+	// after a minute is stuck, and stuck ones hold locks that stall every
+	// later wine command; it ignores SIGTERM while waiting, so kill it.
+	DispatchQueue.main.asyncAfter(deadline: .now() + 60) { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
+}
+
+/// Whether a process started by Crosstalk can read `path`, within 5 seconds.
+private func childCanRead(_ path: String) -> Bool {
+	let p = Process()
+	p.executableURL = URL(fileURLWithPath: "/usr/bin/head")
+	p.arguments = ["-c", "1", path]
+	p.standardOutput = FileHandle.nullDevice
+	p.standardError = FileHandle.nullDevice
+	guard (try? p.run()) != nil else { return false }
+	let deadline = Date().addingTimeInterval(5)
+	while p.isRunning && Date() < deadline { usleep(50_000) }
+	if p.isRunning { kill(p.processIdentifier, SIGKILL); return false }
+	return p.terminationStatus == 0
 }
 
 // MARK: - Process inspection

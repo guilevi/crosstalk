@@ -19,6 +19,7 @@
 //   PITCH [0..100]         -> OK <0..100>       (50 is the voice's default)
 //   HISTORY [n]            -> OK <n>, then n lines: <event>\t<id>\t<source>\t<text>
 //   SOURCE <name>          -> OK           label this connection in HISTORY
+//   BOTTLES                -> OK <n>, then n lines: <running|blocked>\t<bottle path>
 //   QUIT                   -> OK           close this connection
 
 import Foundation
@@ -100,6 +101,13 @@ final class Connection {
 			writeLine(fd, "OK \(Int(r.rounded()))")
 		case "HISTORY":
 			let lines = onMain { speaker.recentHistory(arg.flatMap { Int($0) } ?? 50) }
+			writeLine(fd, "OK \(lines.count)")
+			for l in lines { writeLine(fd, l) }
+		case "BOTTLES":
+			let lines = onMain { () -> [String] in
+				let w = BottleWatcher.shared
+				return w.activeBottles.map { (w.blockedBottles.contains($0) ? "blocked" : "running") + "\t" + $0 }
+			}
 			writeLine(fd, "OK \(lines.count)")
 			for l in lines { writeLine(fd, l) }
 		case "SOURCE":

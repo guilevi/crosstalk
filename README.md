@@ -85,8 +85,12 @@ keys. If a bottle boots first, its `nvda.exe` opens Crosstalk in the
 background.
 
 macOS will ask, once each:
-- **Removable volume access** for Crosstalk, when bottles live on an external
-  drive. Without it the watcher can't see those bottles.
+- **Removable Volumes** (Privacy & Security, Files and Folders) for Crosstalk,
+  when bottles live on an external drive. Without it, wine commands Crosstalk
+  starts there hang. The watcher checks first and holds off instead: Settings
+  says the bottle is blocked, and `printf 'BOTTLES\n' | nc 127.0.0.1 47655`
+  lists it as `blocked`. Bottles still get their `nvda.exe` from the installer
+  or a `wine` launch, just not automatically on boot.
 - **Accessibility**, for stopping speech with Control while other apps are in
   front.
 
@@ -101,6 +105,7 @@ sides), documented at the top of `daemon/Server.swift`. For example:
 ```sh
 printf 'HISTORY 20\n' | nc 127.0.0.1 47655
 printf 'RATE 65\nVOICE\n' | nc 127.0.0.1 47655
+printf 'BOTTLES\n' | nc 127.0.0.1 47655    # running bottles and whether Crosstalk can reach them
 ```
 
 ## Tests

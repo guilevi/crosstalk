@@ -116,6 +116,13 @@ struct SettingsView: View {
 					? "No bottle with crosstalk installed is running."
 					: "Serving bottles: " + app.bottles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ") + ".")
 					.foregroundStyle(.secondary)
+				if !app.blockedBottles.isEmpty {
+					Text("Crosstalk can't reach " + app.blockedBottles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
+						+ " on its external drive, so it can't start NVDA there itself. Allow Crosstalk under Privacy & Security, Files and Folders, Removable Volumes. Until then the bottle starts it on its own when it can.")
+					Button("Open Privacy Settings…") {
+						NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
+					}
+				}
 			}
 
 			Section("Recent speech") {
@@ -180,6 +187,7 @@ func AVSystemLanguage() -> String { AVSpeechSynthesisVoice.currentLanguageCode()
 final class AppState: ObservableObject {
 	@Published var status = "Starting…"
 	@Published var bottles: [String] = []
+	@Published var blockedBottles: [String] = []
 	@Published var openAtLogin: Bool = SMAppService.mainApp.status == .enabled {
 		didSet {
 			guard openAtLogin != (SMAppService.mainApp.status == .enabled) else { return }
@@ -194,7 +202,7 @@ final class AppState: ObservableObject {
 }
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
 	private let state = AppState()
 	private var statusItem: NSStatusItem!
 	private var window: NSWindow?
@@ -217,7 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 		}
 		_ = Speaker.shared
 		ControlKeyMonitor.shared.start()
-		BottleWatcher.shared.onChange = { [state] in state.bottles = BottleWatcher.shared.activeBottles }
+		BottleWatcher.shared.onChange = { [state] in
+			state.bottles = BottleWatcher.shared.activeBottles
+			state.blockedBottles = BottleWatcher.shared.blockedBottles
+		}
 		BottleWatcher.shared.start()
 		buildMenu()
 
@@ -275,15 +286,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
 	private func showSettings() {
 		if window == nil {
-			let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(app: state)))
+			let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
+			                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
+			                 backing: .buffered, defer: false)
+			w.contentView = NSHostingView(rootView: SettingsView(app: state))
 			w.title = "Crosstalk"
-			w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-			w.setContentSize(NSSize(width: 520, height: 640))
 			w.isReleasedWhenClosed = false
+			// Open on whichever Space the user is on, not the one it last used.
+			w.collectionBehavior = [.moveToActiveSpace]
+			w.delegate = self
 			w.center()
 			window = w
 		}
-		NSApp.activate(ignoringOtherApps: true)
+		// A menu-bar-only app can't reliably take focus, which leaves the window
+		// out of reach of VoiceOver and Command-Tab. Be a regular app while
+		// settings are open.
+		NSApp.setActivationPolicy(.regular)
+		NSApp.activate()
 		window?.makeKeyAndOrderFront(nil)
+	}
+
+	func windowWillClose(_ note: Notification) {
+		NSApp.setActivationPolicy(.accessory)
 	}
 }
