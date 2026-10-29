@@ -76,6 +76,7 @@ struct SettingsView: View {
 	@ObservedObject var speaker = Speaker.shared
 	@ObservedObject var control = ControlKeyMonitor.shared
 	@ObservedObject var app: AppState
+	@ObservedObject var bottleList = BottleList.shared
 
 	var body: some View {
 		Form {
@@ -100,6 +101,38 @@ struct SettingsView: View {
 				}
 			}
 
+			Section("Bottles") {
+				if bottleList.crossOver == nil {
+					Text("CrossOver was not found. Crosstalk works in CrossOver bottles, so install CrossOver first.")
+						.foregroundStyle(.secondary)
+				}
+				if bottleList.bottles.isEmpty {
+					Text("No bottles found in \(bottleList.bottleFolder.path).").foregroundStyle(.secondary)
+				}
+				ForEach(bottleList.bottles) { b in
+					HStack {
+						Toggle(isOn: Binding(get: { b.state != .off }, set: { bottleList.set(b, on: $0) })) {
+							Text(b.name)
+							Text(bottleStatus(b)).foregroundStyle(.secondary)
+						}
+						.accessibilityLabel("\(b.name), \(bottleStatus(b))")
+						if b.state == .outdated {
+							Button("Update") { bottleList.set(b, on: true) }
+								.accessibilityLabel("Update \(b.name)")
+						}
+					}
+					.disabled(bottleList.busy != nil)
+				}
+				Button("Choose Another Bottle…") { bottleList.choose() }
+					.disabled(bottleList.busy != nil)
+				if let m = bottleList.message {
+					HStack {
+						if bottleList.busy != nil { ProgressView().controlSize(.small) }
+						Text(m).foregroundStyle(.secondary)
+					}
+				}
+			}
+
 			Section("Interrupting") {
 				Toggle("Stop speech when Control is pressed", isOn: $control.enabled)
 				if control.enabled && !control.trusted {
@@ -112,10 +145,6 @@ struct SettingsView: View {
 			Section("General") {
 				Toggle("Open Crosstalk at login", isOn: $app.openAtLogin)
 				Text(app.status).foregroundStyle(.secondary)
-				Text(app.bottles.isEmpty
-					? "No bottle with crosstalk installed is running."
-					: "Serving bottles: " + app.bottles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ") + ".")
-					.foregroundStyle(.secondary)
 				if !app.blockedBottles.isEmpty {
 					Text("Crosstalk can't reach " + app.blockedBottles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
 						+ " on its external drive, so it can't start NVDA there itself. Allow Crosstalk under Privacy & Security, Files and Folders, Removable Volumes. Until then the bottle starts it on its own when it can.")
@@ -136,6 +165,15 @@ struct SettingsView: View {
 	/// Spoken text, newest first.
 	private var spoken: [Speaker.Event] {
 		speaker.history.filter { $0.kind == "speak" && !$0.text.isEmpty }.suffix(100).reversed()
+	}
+
+	private func bottleStatus(_ b: BottleList.Bottle) -> String {
+		if bottleList.busy == b.path { return "Working…" }
+		switch b.state {
+		case .off: return "Crosstalk off"
+		case .on: return app.bottles.contains(b.path) ? "Crosstalk on, running" : "Crosstalk on"
+		case .outdated: return "Crosstalk on, needs an update"
+		}
 	}
 
 	private var languageBinding: Binding<String> {
@@ -347,9 +385,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 		}
 		_ = Speaker.shared
 		ControlKeyMonitor.shared.start()
+		writeLauncher()
 		BottleWatcher.shared.onChange = { [state] in
 			state.bottles = BottleWatcher.shared.activeBottles
 			state.blockedBottles = BottleWatcher.shared.blockedBottles
+			BottleList.shared.refresh()
 		}
 		BottleWatcher.shared.start()
 		buildMenu()
@@ -431,6 +471,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 	@objc private func toggleControl() { ControlKeyMonitor.shared.enabled.toggle() }
 
 	private func showSettings() {
+		BottleList.shared.refresh()
 		if window == nil {
 			let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 520, height: 640),
 			                 styleMask: [.titled, .closable, .miniaturizable, .resizable],

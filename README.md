@@ -7,6 +7,12 @@ macOS voices, as long as Crosstalk is running.
 
 Crosstalk only mirrors the parts of NVDA that matter for programs and games that talk directly to it through the controller client or UIA messages. It doesn't do any work to actually read the screen.
 
+## Why?
+
+Quite simply, because I only have a Macbook and I want to be able to play games on Crossover. Unmodified NVDA will run and works with most games that talk to it, but it requires some setup if you don't want Espeak and likes to cause strange issues with focus. Games take forever to recover focus when cmd+tabbed into, if they use UIA they sometimes stop working entirely with no explanation, etc.
+
+Crosstalk does nothing to let you access Windows UI controls, so games that show actual dialogs will still be an issue, but it does stand in for NVDA in the ways that matter to 99% of the use cases I needed to cover.
+
 ## Pieces
 
 A Windows program reaches Crosstalk by one of two routes:
@@ -63,20 +69,31 @@ if NVDA is ever unavailable.
 | UIA `CurrentThenMostRecent` | finish current, replace the rest |
 | Control key, anywhere (Crosstalk setting) | stop |
 
-## Build and install
+## Install
+
+Download `Crosstalk.zip` from the [latest release](https://github.com/guilevi/crosstalk/releases/latest), unzip it, put Crosstalk.app in Applications and open it. It runs on macOS 14 or later, on Apple Silicon and Intel. You'll have to go through the typical steps of running an unnotarized app.
+
+The settings window will automatically find and list all the bottles that your install of Crossover knows about. You can switch Crosstalk on for each bottle you
+want it in, or press **Choose Another Bottle** to browse for a non-Crossover bottle.
+
+Every time there is a Crossover or Crosstalk update, you will need to update each bottle's version of the Crosstalk files. You'll see an update button next to a bottle's switch if it needs it.
+
+Switching a bottle on sets up `C:\Program Files\Crosstalk\nvda.exe`, the
+UIA proxy in `system32` and `syswow64` (Wine's originals backed up beside
+nvda.exe), and a `uiautomationcore` native-then-builtin DLL override.
+Switching it off puts everything back.
+
+## Build
 
 ```sh
 ./build.sh                                   # needs Xcode or command line tools and mingw-w64
-./install.sh /path/to/Bottle       # per each bottle you want Crosstalk to work on
+./install.sh /path/to/Bottle                 # optional: the same as Settings does, from a terminal
 ./install.sh --uninstall /path/to/Bottle
 ```
 
-`install.sh` puts Crosstalk.app in `~/Applications` and sets up the bottle:
-`C:\Program Files\Crosstalk\nvda.exe`, the proxy in `system32` and `syswow64`
-(Wine's originals backed up beside nvda.exe), and a `uiautomationcore`
-native-then-builtin DLL override.
-It will probably need to be re-run after a Wine or Crossover update, so the copy of Wine's
-uiautomationcore the proxy forwards to matches the new Wine.
+`build/Crosstalk.app` carries the Windows parts and `app/bottle-setup.sh`,
+which does the bottle setup for both Settings and `install.sh`. `install.sh`
+also copies the app to `~/Applications`.
 
 Crosstalk registers itself to open at login, and starts `nvda.exe` in any
 bottle that has it installed as soon as that bottle boots. It watches for the
@@ -117,8 +134,12 @@ the top of `run_tests.py`). It checks in
 Crosstalk's history that queued lines finish in order, interrupts cut off,
 and stops silence.
 
-## Licence
+## License
 
-`wine/nvda/nvdaController.idl` comes from NVDA (LGPL 2.1), with the one
+MIT (see `LICENSE`), except that `wine/nvda/nvdaController.idl` comes from NVDA (LGPL 2.1), with the one
 `[callback]` procedure removed because widl can't generate it; it is the
 interface's last procedure, so the others keep their numbers.
+
+## Thanks
+
+Massive thanks to the [Prism](https://github.com/ethindp/prism) and [Tolk](https://github.com/dkager/tolk) abstraction libraries, which have been used by so many projects and I heavily relied on for testing Crosstalk.

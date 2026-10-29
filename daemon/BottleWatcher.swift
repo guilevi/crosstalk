@@ -119,7 +119,7 @@ private func launch(in prefix: String, wineserver: String) {
 }
 
 /// Whether a process started by Crosstalk can read `path`, within 5 seconds.
-private func childCanRead(_ path: String) -> Bool {
+func childCanRead(_ path: String) -> Bool {
 	let p = Process()
 	p.executableURL = URL(fileURLWithPath: "/usr/bin/head")
 	p.arguments = ["-c", "1", path]
